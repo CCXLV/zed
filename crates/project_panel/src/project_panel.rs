@@ -138,6 +138,7 @@ pub struct ProjectPanel {
     drag_target_entry: Option<DragTarget>,
     marked_entries: Vec<SelectedEntry>,
     selection: Option<SelectedEntry>,
+    active_entry: Option<SelectedEntry>,
     context_menu: Option<(Entity<ContextMenu>, Point<Pixels>, Subscription)>,
     filename_editor: Entity<Editor>,
     clipboard: Option<ClipboardEntry>,
@@ -865,6 +866,7 @@ impl ProjectPanel {
                 drag_target_entry: None,
                 marked_entries: Default::default(),
                 selection: None,
+                active_entry: None,
                 context_menu: None,
                 filename_editor,
                 clipboard: None,
@@ -950,6 +952,7 @@ impl ProjectPanel {
                                     project_panel.marked_entries.clear();
                                     project_panel.marked_entries.push(entry);
                                     project_panel.selection = Some(entry);
+                                    project_panel.active_entry = Some(entry);
                                 });
                                 if !focus_opened_item {
                                     let focus_handle = project_panel.read(cx).focus_handle.clone();
@@ -3585,6 +3588,13 @@ impl ProjectPanel {
         });
     }
 
+    fn reset_selected_entries(&mut self) {
+        self.marked_entries.clear();
+        if let Some(active_entry) = self.active_entry {
+            self.marked_entries.push(active_entry);
+        }
+    }
+
     fn move_worktree_entry(
         &mut self,
         entry_to_move: ProjectEntryId,
@@ -5670,12 +5680,8 @@ impl ProjectPanel {
                             // Stop propagation to prevent the catch-all context menu for the project
                             // panel from being deployed.
                             cx.stop_propagation();
-                            // Some context menu actions apply to all marked entries. If the user
-                            // right-clicks on an entry that is not marked, they may not realize the
-                            // action applies to multiple entries. To avoid inadvertent changes, all
-                            // entries are unmarked.
                             if !this.marked_entries.contains(&selection) {
-                                this.marked_entries.clear();
+                                this.reset_selected_entries();
                             }
                             this.deploy_context_menu(event.position, entry_id, window, cx);
                         },
@@ -6057,20 +6063,20 @@ impl ProjectPanel {
         let is_ignored = worktree
             .entry_for_id(entry_id)
             .is_none_or(|entry| entry.is_ignored && !entry.is_always_included);
+
+        let selected_entry = SelectedEntry {
+            worktree_id,
+            entry_id,
+        };
+
         if skip_ignored && is_ignored {
             if self.index_for_entry(entry_id, worktree_id).is_none() {
                 anyhow::bail!("can't reveal an ignored entry in the project panel");
             }
 
-            self.selection = Some(SelectedEntry {
-                worktree_id,
-                entry_id,
-            });
-            self.marked_entries.clear();
-            self.marked_entries.push(SelectedEntry {
-                worktree_id,
-                entry_id,
-            });
+            self.selection = Some(selected_entry);
+            self.active_entry = Some(selected_entry);
+            self.reset_selected_entries();
             self.autoscroll(cx);
             cx.notify();
             return Ok(());
@@ -6087,11 +6093,8 @@ impl ProjectPanel {
 
         self.expand_entry(worktree_id, entry_id, cx);
         self.update_visible_entries(Some((worktree_id, entry_id)), false, true, window, cx);
-        self.marked_entries.clear();
-        self.marked_entries.push(SelectedEntry {
-            worktree_id,
-            entry_id,
-        });
+        self.active_entry = Some(selected_entry);
+        self.reset_selected_entries();
         cx.notify();
         Ok(())
     }
@@ -6774,7 +6777,7 @@ impl Render for ProjectPanel {
                                     }
                                     cx.stop_propagation();
                                     this.selection = None;
-                                    this.marked_entries.clear();
+                                    this.reset_selected_entries();
                                     this.focus_handle(cx).focus(window, cx);
                                 }))
                                 .on_mouse_down(
